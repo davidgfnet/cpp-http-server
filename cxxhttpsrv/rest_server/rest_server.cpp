@@ -15,6 +15,7 @@
 #include <ctime>
 #include <memory>
 #include <thread>
+#include <iostream>
 
 #if defined(_WIN32) && !defined(__CYGWIN__)
 #include <condition_variable>
@@ -34,6 +35,11 @@
 #include "response_generator.h"
 #include "rest_server.h"
 #include "../libmicrohttpd/microhttpd.h"
+
+// Use SSL on REST servers
+// Assuming that SSL is built in and GnuTLS ver >= 3
+#include <gnutls/gnutls.h>
+#include <gnutls/abstract.h>
 
 namespace cxxhttpsrv {
 
@@ -362,7 +368,47 @@ void rest_server::set_max_request_body_size(unsigned max_request_body_size) { th
 void rest_server::set_threads(unsigned threads) { this->threads = threads; }
 void rest_server::set_timeout(unsigned timeout) { this->timeout = timeout; }
 
-bool rest_server::start(rest_service* service, unsigned port) {
+void rest_server::set_x509_cert(const std::string & cert, const std::string & pkey) {
+  gnutls_datum_t data_pkey;
+  gnutls_load_file (pkey.c_str(), &data_pkey);
+
+  gnutls_privkey_t priv_key;
+  gnutls_privkey_init(&priv_key);
+  gnutls_privkey_import_x509_raw (priv_key,
+                                  &data_pkey, GNUTLS_X509_FMT_PEM,
+                                  NULL, 0);
+
+  gnutls_datum_t data_cert;
+  gnutls_load_file (cert.c_str(), &data_cert);
+
+  gnutls_pcert_st * pcrt = new gnutls_pcert_st();
+  gnutls_pcert_import_x509_raw(pcrt, &data_cert, GNUTLS_X509_FMT_PEM, 0);
+
+  rest_server::ssl_x509_cert = pcrt;
+  rest_server::ssl_pkey = priv_key;
+}
+
+void* rest_server::ssl_x509_cert;
+void* rest_server::ssl_pkey;
+
+// Borrowed from libmicrohttpd/doc/chapters/tlsauthentication.inc
+int cert_callback (gnutls_session_t session,
+                   const gnutls_datum_t* req_ca_dn,
+                   int nreqs,
+                   const gnutls_pk_algorithm_t* pk_algos,
+                   int pk_algos_length,
+                   gnutls_pcert_st** pcert,
+                   unsigned int *pcert_length,
+                   gnutls_privkey_t * pkey)
+{
+  *pkey = (gnutls_privkey_t)rest_server::ssl_pkey;
+  *pcert_length = 1;
+  *pcert = (gnutls_pcert_st*)rest_server::ssl_x509_cert;
+  return 0;
+}
+
+
+bool rest_server::start(rest_service* service, unsigned port, bool tls) {
   if (!service) return false;
   this->service = service;
 
@@ -378,7 +424,7 @@ bool rest_server::start(rest_service* service, unsigned port) {
       { MHD_OPTION_END, 0, nullptr }
     };
 
-    daemon = MHD_start_daemon((threads ? MHD_USE_SELECT_INTERNALLY : MHD_USE_THREAD_PER_CONNECTION) | (use_poll ? MHD_USE_POLL : 0) | MHD_USE_PIPE_FOR_SHUTDOWN,
+    daemon = MHD_start_daemon((threads ? MHD_USE_SELECT_INTERNALLY : MHD_USE_THREAD_PER_CONNECTION) | (use_poll ? MHD_USE_POLL : 0) | MHD_USE_PIPE_FOR_SHUTDOWN | (tls ? MHD_USE_SSL : 0),
                               port, nullptr, nullptr, &handle_request, this,
                               MHD_OPTION_LISTENING_ADDRESS_REUSE, 1,
                               MHD_OPTION_ARRAY, threadpool_size,
@@ -386,6 +432,7 @@ bool rest_server::start(rest_service* service, unsigned port) {
                               MHD_OPTION_CONNECTION_MEMORY_LIMIT, size_t(64 << 10),
                               MHD_OPTION_CONNECTION_TIMEOUT, timeout,
                               MHD_OPTION_NOTIFY_COMPLETED, &request_completed, this,
+                              MHD_OPTION_HTTPS_CERT_CALLBACK, cert_callback,
                               MHD_OPTION_END);
 
     if (daemon) {

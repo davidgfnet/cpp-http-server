@@ -7,6 +7,7 @@ MICRORESTD_VERSION := 0.9.0-devel
 
 MICRORESTD_OBJECTS := \
  connection.o \
+ connection_https.o \
  daemon.o \
  internal.o \
  memorypool.o \
