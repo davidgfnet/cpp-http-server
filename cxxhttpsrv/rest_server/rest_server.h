@@ -32,7 +32,7 @@ class rest_server {
   void set_threads(unsigned threads);
   void set_timeout(unsigned timeout);
 
-  bool start(rest_service* service, unsigned port);
+  bool start(rest_service* service, unsigned port, bool tls);
   void stop();
   bool wait_until_signalled();
 
@@ -59,6 +59,11 @@ class rest_server {
   unsigned max_request_body_size = 0;
   unsigned threads = 0;
   unsigned timeout = 0;
+
+public:
+  static void set_x509_cert(const std::string & cert, const std::string & pkey);
+
+  static void *ssl_x509_cert, *ssl_pkey;
 };
 
 } // namespace cxxhttpsrv

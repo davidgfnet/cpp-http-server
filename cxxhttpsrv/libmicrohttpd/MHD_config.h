@@ -64,7 +64,7 @@
 #define HAVE_SYS_MSG_H 0 /* Define to 1 if you have the <sys/msg.h> header file. */
 #define HAVE_SYS_TYPES_H 1 /* Define to 1 if you have the <sys/types.h> header file. */
 #define HAVE_TIME_H 1 /* Define to 1 if you have the <time.h> header file. */
-#define HTTPS_SUPPORT 0 /* disable HTTPS support */
+#define HTTPS_SUPPORT 1 /* disable HTTPS support */
 
 // 5) Package information
 

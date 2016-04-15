@@ -3116,8 +3116,7 @@ parse_options_va (struct MHD_Daemon *daemon,
 #endif
           return MHD_NO;
 #else
-          if (0 != (daemon->options & MHD_USE_SSL))
-            daemon->cert_callback = va_arg (ap, gnutls_certificate_retrieve_function2 *);
+          daemon->cert_callback = va_arg (ap, gnutls_certificate_retrieve_function2 *);
           break;
 #endif
 #endif
