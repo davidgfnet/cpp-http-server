@@ -17,7 +17,11 @@ namespace cxxhttpsrv {
 
 class rest_service {
  public:
+  // Regular request handle
   virtual bool handle(rest_request& req) = 0;
+
+  // HTTP Range request, disabled by default
+  virtual bool handle_partial(rest_request& req) { return false; }
 };
 
 } // namespace cxxhttpsrv

@@ -23,6 +23,7 @@ class rest_request {
 
   virtual bool respond(const char* content_type, string_piece body, bool make_copy = true) = 0;
   virtual bool respond(const char* content_type, response_generator* generator) = 0;
+  virtual bool respond_partial(const char* content_type, response_generator* generator, std::string pdesc) = 0;
   virtual bool respond_not_found() = 0;
   virtual bool respond_method_not_allowed(const char* comma_separated_allowed_methods) = 0;
   virtual bool respond_error(string_piece error, int code = 400, bool make_copy = true) = 0;
@@ -32,6 +33,9 @@ class rest_request {
   std::string body;
   std::string content_type;
   std::unordered_map<std::string, std::string> params;
+
+  // partial request
+  uint64_t offset, max_size;
 };
 
 } // namespace cxxhttpsrv

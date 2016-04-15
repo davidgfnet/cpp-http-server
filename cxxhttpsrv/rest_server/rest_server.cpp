@@ -59,7 +59,7 @@ class rest_server::microhttpd_request : public rest_request {
  public:
   static bool initialize();
 
-  microhttpd_request(const rest_server& server, MHD_Connection* connection, const char* url, const char* content_type, const char* method);
+  microhttpd_request(const rest_server& server, MHD_Connection* connection, const char* url, const char* content_type, const char* method, uint64_t start, uint64_t length);
 
   int handle(rest_service* service);
   bool process_request_body(const char* request_body, size_t request_body_len);
@@ -69,6 +69,7 @@ class rest_server::microhttpd_request : public rest_request {
 
   virtual bool respond(const char* content_type, string_piece body, bool make_copy = true) override;
   virtual bool respond(const char* content_type, response_generator* generator) override;
+  virtual bool respond_partial(const char* content_type, response_generator* generator, string pdesc) override;
   virtual bool respond_not_found() override;
   virtual bool respond_method_not_allowed(const char* comma_separated_allowed_methods) override;
   virtual bool respond_error(string_piece error, int code = 400, bool make_copy = true) override;
@@ -107,12 +108,14 @@ unique_ptr<MHD_Response, MHD_ResponseDeleter> rest_server::microhttpd_request::r
                                               rest_server::microhttpd_request::response_unsupported_multipart_encoding,
                                               rest_server::microhttpd_request::response_invalid_utf8;
 
-rest_server::microhttpd_request::microhttpd_request(const rest_server& server, MHD_Connection* connection, const char* url, const char* content_type, const char* method)
+rest_server::microhttpd_request::microhttpd_request(const rest_server& server, MHD_Connection* connection, const char* url, const char* content_type, const char* method, uint64_t start, uint64_t length)
   : server(server), connection(connection), unsupported_multipart_encoding(false), remaining_request_body_size(server.max_request_body_size + 1) {
   // Initialize rest_request fields
   this->url = url;
   this->method = method;
   this->content_type = content_type;
+  this->offset = start;
+  this->max_size = length;
 
   // Create post processor if needed
   need_post_processor = this->method == MHD_HTTP_METHOD_POST &&
@@ -174,6 +177,12 @@ int rest_server::microhttpd_request::handle(rest_service* service) {
     if (!valid_utf8(param.first) || !valid_utf8(param.second))
       return MHD_queue_response(connection, MHD_HTTP_UNSUPPORTED_MEDIA_TYPE, response_invalid_utf8.get());
 
+  // Try a partial response, if asked for it
+  if (this->offset != ~0) {
+    if (service->handle_partial(*this))
+      return MHD_YES;
+  }
+
   // Let the service handle the request and respond with one of the respond_* methods.
   return service->handle(*this) ? MHD_YES : MHD_NO;
 }
@@ -217,6 +226,20 @@ bool rest_server::microhttpd_request::respond(const char* content_type, response
   return MHD_queue_response(connection, MHD_HTTP_OK, response.get()) == MHD_YES;
 }
 
+bool rest_server::microhttpd_request::respond_partial(const char* content_type, response_generator* generator, string pdesc) {
+  this->generator.reset(generator);
+  this->generator_end = false;
+  this->generator_offset = 0;
+  unique_ptr<MHD_Response, MHD_ResponseDeleter> response(create_generator_response(this, content_type));
+  if (!response) return false;
+
+  // Add extra range headers!
+  MHD_add_response_header(response.get(), MHD_HTTP_HEADER_ACCEPT_RANGES, "bytes");
+  MHD_add_response_header(response.get(), MHD_HTTP_HEADER_CONTENT_RANGE, pdesc.c_str());
+
+  return MHD_queue_response(connection, MHD_HTTP_PARTIAL_CONTENT, response.get()) == MHD_YES;
+}
+
 bool rest_server::microhttpd_request::respond_not_found() {
   return MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, response_not_found.get()) == MHD_YES;
 }
@@ -247,7 +270,7 @@ MHD_Response* rest_server::microhttpd_request::create_response(string_piece data
 }
 
 MHD_Response* rest_server::microhttpd_request::create_generator_response(microhttpd_request* request, const char* content_type) {
-  unique_ptr<MHD_Response, MHD_ResponseDeleter> response(MHD_create_response_from_callback(-1, 32 << 10, generator_callback, request, nullptr));
+  unique_ptr<MHD_Response, MHD_ResponseDeleter> response(MHD_create_response_from_callback(MHD_SIZE_UNKNOWN, 32 << 10, generator_callback, request, nullptr));
   response_common_headers(response, content_type);
   return response.release();
 }
@@ -473,6 +496,37 @@ bool rest_server::wait_until_signalled() {
 }
 #endif
 
+void rest_server::parse_range(const char * range, uint64_t &start, uint64_t &length) {
+  // Range has the following format: Range: bytes = a-b,c-d,e-f
+  // We will only support one range, since supporting multiple ranges involves multipart responses :)
+
+  std::string prange;
+  while (*range != 0) {
+    if (*range != ' ' || *range != '\t')
+      prange += *range;
+    range++;
+  }
+
+  // Only support range bytes
+  if (prange.substr(0, 6) != "bytes=") return;
+  prange = prange.substr(6);
+
+  // Do not support multiranges!
+  if (prange.find(',') != std::string::npos) return;
+
+  // This should have the follwoing format: %u-%u
+  size_t dpoint = prange.find('-');
+  if (dpoint == std::string::npos) return;
+
+  std::string from = prange.substr(0, dpoint);
+  std::string to   = prange.substr(dpoint + 1);
+
+  if (from.size())
+    start = strtoll(from.c_str(), NULL, 10);
+  if (to.size())
+    length = strtoll(to.c_str(), NULL, 10) - start;
+}
+
 int rest_server::handle_request(void* cls, struct MHD_Connection* connection, const char* url, const char* method, const char* /*version*/, const char* upload_data, size_t* upload_data_size, void** con_cls) {
   auto self = (rest_server*) cls;
   auto request = (microhttpd_request*) *con_cls;
@@ -480,9 +534,14 @@ int rest_server::handle_request(void* cls, struct MHD_Connection* connection, co
   // Do we have a new request?
   if (!request) {
     const char* content_type = MHD_lookup_connection_value (connection, MHD_HEADER_KIND, MHD_HTTP_HEADER_CONTENT_TYPE);
+    const char* http_range = MHD_lookup_connection_value (connection, MHD_HEADER_KIND, MHD_HTTP_HEADER_RANGE);
     if (!content_type) content_type = "";
 
-    if (!(request = new microhttpd_request(*self, connection, url, content_type, method)))
+    uint64_t start = ~0, length = ~0;
+    if (http_range)
+      rest_server::parse_range(http_range, start, length);
+
+    if (!(request = new microhttpd_request(*self, connection, url, content_type, method, start, length)))
       return fprintf(stderr, "Cannot allocate new request!\n"), MHD_NO;
 
     *con_cls = request;

@@ -41,6 +41,7 @@ class rest_server {
 
   static int handle_request(void* cls, libmicrohttpd::MHD_Connection* connection, const char* url, const char* method, const char* version, const char* upload_data, size_t* upload_data_size, void** con_cls);
   static void request_completed(void* cls, libmicrohttpd::MHD_Connection* connection, void** con_cls, int toe);
+  static void parse_range(const char * range, uint64_t &start, uint64_t &length);
 
   void logf(const char* message, ...);
   void log_append_pair(std::string& message, const char* key, const std::string& value);
