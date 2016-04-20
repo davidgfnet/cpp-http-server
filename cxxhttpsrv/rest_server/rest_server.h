@@ -64,6 +64,7 @@ public:
   static void set_x509_cert(const std::string & cert, const std::string & pkey);
 
   static void *ssl_x509_cert, *ssl_pkey;
+  static unsigned int ssl_numcrt;
 };
 
 } // namespace cxxhttpsrv

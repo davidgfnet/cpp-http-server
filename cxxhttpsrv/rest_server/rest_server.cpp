@@ -404,8 +404,9 @@ void rest_server::set_x509_cert(const std::string & cert, const std::string & pk
   gnutls_datum_t data_cert;
   gnutls_load_file (cert.c_str(), &data_cert);
 
-  gnutls_pcert_st * pcrt = new gnutls_pcert_st();
-  gnutls_pcert_import_x509_raw(pcrt, &data_cert, GNUTLS_X509_FMT_PEM, 0);
+  gnutls_pcert_st * pcrt = new gnutls_pcert_st[16];
+  rest_server::ssl_numcrt = 16;
+  gnutls_pcert_list_import_x509_raw(pcrt, &rest_server::ssl_numcrt, &data_cert, GNUTLS_X509_FMT_PEM, 0);
 
   rest_server::ssl_x509_cert = pcrt;
   rest_server::ssl_pkey = priv_key;
@@ -413,6 +414,7 @@ void rest_server::set_x509_cert(const std::string & cert, const std::string & pk
 
 void* rest_server::ssl_x509_cert;
 void* rest_server::ssl_pkey;
+unsigned int rest_server::ssl_numcrt;
 
 // Borrowed from libmicrohttpd/doc/chapters/tlsauthentication.inc
 int cert_callback (gnutls_session_t session,
@@ -425,7 +427,7 @@ int cert_callback (gnutls_session_t session,
                    gnutls_privkey_t * pkey)
 {
   *pkey = (gnutls_privkey_t)rest_server::ssl_pkey;
-  *pcert_length = 1;
+  *pcert_length = rest_server::ssl_numcrt;
   *pcert = (gnutls_pcert_st*)rest_server::ssl_x509_cert;
   return 0;
 }
